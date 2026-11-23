@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('sync', Path(__file__).parents[1] / 'engineering-airtable-sync/scripts/sync.py')
 sync = importlib.util.module_from_spec(spec); spec.loader.exec_module(sync)
@@ -57,10 +58,11 @@ class TestSync(unittest.TestCase):
         with self.assertRaisesRegex(sync.SyncError, 'changed since preview'): self.apply(new_id)
     def test_human_owned_fields_preserved(self):
         pid=self.preview(); self.apply(pid)
-        rec=next(iter(self.api.tables['projects'].values())); rec['fields']['Owner']='Alice'
+        rec=next(iter(self.api.tables['projects'].values())); rec['fields'].update({'Owner':'Alice','Priority':'High','Deadline':'2026-12-01'})
         self.payload['completed']='New work'; self.infile.write_text(json.dumps(self.payload))
         with contextlib.redirect_stdout(io.StringIO()): sync.preview(self.args,self.config,self.state,self.api)
-        self.apply(list(self.state['plans'])[-1]); self.assertEqual(rec['fields']['Owner'],'Alice')
+        self.apply(list(self.state['plans'])[-1]); fresh=next(iter(self.api.tables['projects'].values()))['fields']
+        self.assertEqual({k:fresh[k] for k in ('Owner','Priority','Deadline')}, {'Owner':'Alice','Priority':'High','Deadline':'2026-12-01'})
     def test_ambiguous_update_write_is_reconciled(self):
         pid = self.preview()
         original = self.api.upsert
@@ -89,6 +91,28 @@ class TestSync(unittest.TestCase):
         self.args.refresh = True
         with contextlib.redirect_stdout(io.StringIO()): sync.preview(self.args, self.config, self.state, self.api)
         self.apply(list(self.state['plans'])[-1])
+    def test_partial_failure_cli_reports_persisted_steps(self):
+        pid=self.preview(); self.api.fail_update=True
+        stderr=io.StringIO()
+        with mock.patch.object(sync, 'locked', contextlib.nullcontext), mock.patch.object(sync, 'load_config', return_value=self.config), mock.patch.object(sync, 'Airtable', return_value=self.api), mock.patch('sys.argv',['sync.py','apply',pid]), contextlib.redirect_stderr(stderr):
+            self.assertEqual(sync.main(),1)
+        report=json.loads(stderr.getvalue())
+        self.assertEqual(report['status'],'partial_failure')
+        self.assertTrue(report['project_confirmed']); self.assertFalse(report['update_confirmed'])
+        self.assertEqual(report['plan_id'],pid)
+    def test_blank_progress_preview_makes_no_remote_writes(self):
+        self.payload['completed']='  '
+        self.infile.write_text(json.dumps(self.payload))
+        with self.assertRaises(sync.SyncError): self.preview()
+        self.assertEqual(self.api.writes,[])
+        self.assertEqual(self.state['plans'],{})
+    def test_same_payload_after_restart_no_extra_record(self):
+        pid=self.preview();self.apply(pid)
+        self.state=sync.read_json(sync.STATE)
+        self.preview();self.apply(pid)
+        self.assertEqual(len(self.api.tables['projects']),1)
+        self.assertEqual(len(self.api.tables['updates']),1)
+        self.assertEqual(self.api.writes,['projects','updates'])
     def test_empty_or_unknown_input_rejected(self):
         with self.assertRaises(sync.SyncError): sync.validate_payload({'project_name':'x','title':'t','completed':''})
         with self.assertRaises(sync.SyncError): sync.validate_payload({**self.payload,'token':'secret'})

@@ -217,7 +217,12 @@ def main():
             elif args.cmd == 'preview': preview(args, c, state, Airtable(c))
             else: apply(args, c, state, Airtable(c))
     except (SyncError, KeyError, ValueError) as e:
-        print(f'Error: {e}', file=sys.stderr); return 1
+        if args.cmd == 'apply':
+            saved = read_json(STATE, {}).get('plans', {}).get(args.plan_id, {})
+            print(json.dumps({'status': 'partial_failure' if saved.get('project_done') else 'failed_or_unknown', 'plan_id': args.plan_id, 'project_confirmed': bool(saved.get('project_done')), 'update_confirmed': bool(saved.get('update_done')), 'error': str(e), 'recovery': 'Resolve the error and retry the same plan ID; unconfirmed writes may have reached Airtable.'}, ensure_ascii=False), file=sys.stderr)
+        else:
+            print(f'Error: {e}', file=sys.stderr)
+        return 1
     return 0
 
 if __name__ == '__main__': sys.exit(main())
