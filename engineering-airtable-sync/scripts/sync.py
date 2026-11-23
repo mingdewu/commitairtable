@@ -71,7 +71,7 @@ def token(c):
         if secret_path.stat().st_mode & 0o077: raise SyncError('Token file permissions must be 600.')
         value = secret_path.read_text().strip()
         if value: return value
-    raise SyncError('Airtable token unavailable. Run the browser setup wizard: python3 <skill-dir>/scripts/setup.py.')
+    raise SyncError('Airtable token unavailable. Airtable credential is unavailable locally; obtain it through the authorized account flow.')
 
 class Airtable:
     def __init__(self, config): self.c, self.token = config, token(config)

@@ -36,25 +36,22 @@ python3 scripts/install.py --agent antigravity
 
 在 GitHub 仓库页面选择 **Code → Download ZIP**，解压后进入 `commitairtable-main` 文件夹，在终端执行上面的安装命令。
 
-## 首次连接：由 AI 启动浏览器向导
+## 自动发现和配置 Airtable
 
-安装后对 AI 说：
+在实际项目中告诉 AI 项目的目的和要记录的内容。AI 使用已授权的 PAT 查找可见 Base、查看相关项目及字段，判断归属。匹配不确定时先问你；有合适 Base 就在其中建立项目记录；确实没有合适 Base 时，在你选定的现有工作区创建 Base，并自动建立 Projects、Updates 表和关联字段。随后自动保存本地路由。没有配置页面，也不要求手工建表或编辑 JSON。
 
-> 帮我连接 Airtable，启动这个 Skill 的浏览器配置向导。
+PAT 需授予 `data.records:read`、`data.records:write`、`schema.bases:read`、`schema.bases:write` 和相关资源访问；新建 Base 需要目标工作区的 Creator 权限。你可以在对话中提供 PAT，但聊天记录会留存该秘密，测试后建议轮换。AI 不应在回复或日志里复述令牌。若使用安全的本地凭据存储，AI 可直接调用。
 
-AI 会运行 `engineering-airtable-sync/scripts/setup.py`，打开只在本机监听的配置页面。你只需要：
+Airtable 的 Web API 支持在现有工作区创建 Base。公开 API 文档没有创建 Workspace 的接口；确需新工作区时，AI 可以在已登录的 Airtable 网页中操作，并按你的实际项目范围命名。若未登录或权限不足，需要你完成登录/授权。不能把看不到的 Base 当作不存在。
 
-1. 在 Airtable 登录并创建 PAT，授权所选目标。将令牌输入本机页面的密码框，不发到 AI 对话。
-2. 选择创建新 Base 或连接已有 Base，粘贴目标工作区或 Base 的链接。AI 可以协助查找目标链接。
-3. 点击“创建 / 连接并保存配置”。
+```bash
+python3 engineering-airtable-sync/scripts/auto.py discover --project /path/to/project --name '实际项目名'
+python3 engineering-airtable-sync/scripts/auto.py provision --project /path/to/project --mode existing-base --target app已确认的BaseID
+# 或：在已确认的工作区创建新 Base
+python3 engineering-airtable-sync/scripts/auto.py provision --project /path/to/project --mode new-base --target wsp已确认的WorkspaceID --name '已确认的Base名'
+```
 
-向导自动创建 Base（新建模式）、Projects 和 Updates 表、字段及关联，自动取得 ID，保存令牌并生成本地配置。已有同名表会检查兼容性，补齐缺失字段；不兼容时停止，不删除现有数据。无需手工建表、输入终端命令或编辑 JSON。
-
-首次自动建表需要 `data.records:read`、`data.records:write`、`schema.bases:read`、`schema.bases:write`。创建 Base 还需要目标工作区的 Creator 权限，PAT 需覆盖该工作区的当前及未来 Base。仅连接已有 Base 时，可将 PAT 资源限制为该 Base。初始化后可撤掉 `schema.bases:write`，日常同步只使用记录读写。
-
-macOS 令牌保存在钥匙串；Linux / WSL 保存在本机权限 600 的令牌文件（未加密）。配置文件由向导自动生成，内容仅含非秘密 ID。多个项目共用本机令牌，令牌须覆盖所选 Base。每位使用者都需要自己的授权；当前采用 PAT，尚未实现 OAuth 一键授权。向导验证表结构和记录读取，实际记录写入由首次真实同步验证。
-
-如果已有配置，AI 应先检查连接，不覆盖现有目标。遇到创建请求中断，先检查 Airtable 是否已创建 Base，再通过已有 Base 链接恢复，避免重复创建。详细权限和手工排查见 [首次配置说明](engineering-airtable-sync/references/setup.md)。
+这些命令由 AI 执行。实际项目和保存内容确认后，再预览并同步记录。配置会自动写入本机，不需要用户手工填写。当前支持 PAT；OAuth 一键连接尚未实现。
 
 ## 已安装旧版？
 
@@ -65,7 +62,7 @@ git pull --ff-only
 python3 scripts/install.py --agent codex --update
 ```
 
-使用 Antigravity 时将 `codex` 替换为 `antigravity`。然后开启新会话，要求启动浏览器向导；仅更新仓库不会自动更新已复制安装的 Skill。
+使用 Antigravity 时将 `codex` 替换为 `antigravity`。然后开启新会话，要求自动发现 Airtable 目标；仅更新仓库不会自动更新已复制安装的 Skill。
 
 ## 在项目中使用
 
