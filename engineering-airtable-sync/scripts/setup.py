@@ -33,6 +33,8 @@ def fields(project=False):
     result += [{'name': name, 'type': 'multilineText'} for name in names]
     if not project: result += [{'name': 'Source', 'type': 'singleLineText'}]
     result += [{'name': 'Last Synced' if project else 'Recorded At', **DATE}]
+    additions = ['Overview', 'Goals', 'Scope', 'Plan', 'Open Questions', 'Planning Status'] if project else ['Content', 'Type', 'Status']
+    result[1:1] = [{'name': n, 'type': 'multilineText'} for n in additions]
     return result
 
 class MetaAPI:
@@ -47,21 +49,39 @@ class MetaAPI:
         try:
             with urllib.request.urlopen(req, timeout=30) as r: return json.load(r)
         except urllib.error.HTTPError as e:
-            raise SyncError(f'Airtable HTTP {e.code}。请检查令牌的结构读写权限、目标授权和 Creator 权限；已有部分成果会保留。')
+            # Airtable's error body identifies common causes (scope, workspace
+            # access, malformed payload). It contains no credential; retain it
+            # so users can diagnose Base creation instead of seeing a generic 4xx.
+            try:
+                detail = json.loads(e.read().decode('utf-8'))
+                error = detail.get('error', {})
+                if isinstance(error, dict):
+                    reason = error.get('type') or error.get('message')
+                else:
+                    reason = str(error)
+            except (ValueError, UnicodeDecodeError, OSError):
+                reason = ''
+            suffix = f' ({reason})' if reason else ''
+            raise AirtableHTTPError(f'Airtable HTTP {e.code}{suffix}. Check PAT scopes, workspace access, Creator permission, and the requested schema.', e.code)
         except (urllib.error.URLError, OSError, ValueError):
             raise SyncError('连接中断，写入结果可能未知。请到 Airtable 检查；如已创建 Base，请选择连接已有 Base，不要直接重复创建。')
+
+class AirtableHTTPError(SyncError):
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
 
 def extract_id(value, prefix):
     m = re.search(r'(?<![A-Za-z0-9])(' + prefix + r'[A-Za-z0-9]+)(?![A-Za-z0-9])', value)
     if not m: raise SyncError('请填写有效的 Airtable ' + prefix + ' ID 或含该 ID 的链接。')
     return m.group(1)
 
-def bootstrap(api, mode, location, name):
+def bootstrap(api, mode, location, name, upgrade=False):
     if mode not in ('new', 'existing'): raise SyncError('请选择创建或连接。')
     target = extract_id(location, 'wsp' if mode == 'new' else 'app')
     checkpoint = read_json(CHECKPOINT, {})
     key = [mode, target, name]
-    if CONFIG.exists():
+    if CONFIG.exists() and not upgrade:
         raise SyncError('本机已有配置，已停止以免覆盖。若需切换，请先让 AI 检查并备份现有配置。')
     if mode == 'new':
         if checkpoint.get('key') == key:
@@ -72,8 +92,15 @@ def bootstrap(api, mode, location, name):
             if checkpoint:
                 raise SyncError('已有未完成的初始化，请先让 AI 检查 setup-state.json 中的目标，避免重复创建。')
             write_json(CHECKPOINT, {'key': key, 'creation_pending': True})
-            created = api.call('meta/bases', {'name': name or 'Engineering Tracker', 'workspaceId': target,
-                'tables': [{'name': 'Projects', 'fields': fields(True)}]})
+            try:
+                created = api.call('meta/bases', {'name': name or 'Engineering Tracker', 'workspaceId': target,
+                    'tables': [{'name': 'Projects', 'fields': fields(True)}]})
+            except AirtableHTTPError as error:
+                # A definite HTTP rejection means no Base was created; allow a
+                # corrected retry without leaving a false "outcome unknown" lock.
+                if 400 <= error.status < 500 and error.status != 408:
+                    CHECKPOINT.unlink(missing_ok=True)
+                raise
             base_id = created['id']
             write_json(CHECKPOINT, {'key': key, 'base_id': base_id})
     else: base_id = target
@@ -104,4 +131,11 @@ def bootstrap(api, mode, location, name):
         if link['type'] != 'multipleRecordLinks' or link.get('options', {}).get('linkedTableId') != pid:
             raise SyncError('Updates.Project 关联不兼容，未修改已有关联。')
     else: api.call(path + '/' + uid + '/fields', {'name': 'Project', 'type': 'multipleRecordLinks', 'options': {'linkedTableId': pid}})
-    return {'base_id': base_id, 'projects_table': pid, 'updates_table': uid, 'keychain_service': 'engineering-airtable-sync'}
+    tid = ensure_table('Tasks', [{'name': 'Name', 'type': 'singleLineText'}] + [{'name': n, 'type': 'multilineText'} for n in ['Status', 'Description', 'Acceptance Criteria', 'Phase', 'Priority', 'Dependencies', 'Evidence', 'Task ID']])
+    task_table = next(t for t in api.call(path)['tables'] if t['id'] == tid)
+    task_link = next((f for f in task_table['fields'] if f['name'] == 'Project'), None)
+    if task_link and (task_link['type'] != 'multipleRecordLinks' or task_link.get('options', {}).get('linkedTableId') != pid):
+        raise SyncError('Tasks.Project link is incompatible; existing field preserved.')
+    if not task_link:
+        api.call(path + '/' + tid + '/fields', {'name': 'Project', 'type': 'multipleRecordLinks', 'options': {'linkedTableId': pid}})
+    return {'schema_version': 2, 'tasks_table': tid, 'base_id': base_id, 'projects_table': pid, 'updates_table': uid, 'keychain_service': 'engineering-airtable-sync'}

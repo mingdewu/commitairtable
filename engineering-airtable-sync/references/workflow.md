@@ -20,10 +20,10 @@ Per-project destination configurations live under ~/.config/engineering-airtable
 
 ## Input format
 
-All values are strings. Every record needs project_name and title. Record types:
+All values except the optional tasks list are strings. See [planning.md](planning.md) for schema v2, planning fields and task input. Every record needs project_name and title. Record types:
 
 - progress (default for backward compatibility): requires completed; may include verification, evidence, in_progress, blockers, next_steps, source, current_stage, latest_progress.
-- idea / requirement / decision / blocker: requires content and record_status; may include verification, evidence, blockers, next_steps, source. Do not provide completed, latest_progress, current_stage or in_progress for these notes.
+- idea / requirement / decision / blocker / plan / analysis / brief: requires content and record_status; may include verification, evidence, blockers, next_steps, source. Do not provide completed, latest_progress or in_progress for these notes.
 
 Example, only after the user actually confirms this generic idea:
 
@@ -38,7 +38,7 @@ Example, only after the user actually confirms this generic idea:
 }
 ```
 
-Non-progress notes are compatible with the existing schema: Updates.Name is prefixed with type/status, content goes into In Progress, and Completed remains empty. They do not change Latest Progress or Current Stage. The project may be created with its name/ID and Last Synced, but no fabricated completion. Optional blockers/next_steps change their project fields only when explicitly provided and confirmed. No new columns or schema migrations are required for record types.
+Schema v2 stores notes in Content with explicit Type and Status. Old saved configuration snapshots keep the legacy encoding in In Progress so pending plans remain recoverable. Non-progress notes do not claim completed work; they can update confirmed planning fields, Current Stage and Next Steps. Upgrade existing trackers before using planning fields or tasks; see planning.md.
 
 ```bash
 python3 scripts/sync.py preview --project /path/to/project --input /private/path/record.json

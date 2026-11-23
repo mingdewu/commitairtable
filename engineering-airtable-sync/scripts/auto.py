@@ -65,10 +65,24 @@ def main():
     q.add_argument('--mode', choices=['new-base', 'existing-base'], required=True)
     q.add_argument('--target', required=True, help='Confirmed workspace ID or existing Base ID')
     q.add_argument('--name', default='Engineering Tracker'); q.add_argument('--project-id')
+    u = sub.add_parser('upgrade'); u.add_argument('--project', required=True)
     args = p.parse_args()
     try:
         with locked():
             api = MetaAPI(token(read_json(destination(args.project), {})))
+            if args.cmd == 'upgrade':
+                cpath = destination(args.project)
+                c = read_json(cpath)
+                tables = api.call('meta/bases/' + c['base_id'] + '/tables')['tables']
+                for key, name in [('projects_table', 'Projects'), ('updates_table', 'Updates')]:
+                    if not any(t['id'] == c[key] and t['name'].lower() == name.lower() for t in tables):
+                        raise SyncError('Configured tables do not match tracker names; inspect before upgrade.')
+                upgraded = bootstrap(api, 'existing', c['base_id'], '', upgrade=True)
+                if any(upgraded[k] != c[k] for k in ('projects_table', 'updates_table')):
+                    raise SyncError('Configured table IDs differ from named tracker tables; inspect before upgrading.')
+                upgraded['keychain_service'] = c.get('keychain_service', upgraded['keychain_service'])
+                c.update(upgraded); write_json(cpath, c)
+                print(json.dumps({'upgraded': True, 'config': c})); return
             result = candidates(api, args.name) if args.cmd == 'discover' else provision(api, args.project, args.mode, args.target, args.name, args.project_id)
             print(json.dumps(result, ensure_ascii=False, indent=2))
     except SyncError as e: p.exit(1, str(e) + '\n')

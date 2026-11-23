@@ -12,7 +12,7 @@
 
 在另一台电脑的 Codex 或 Antigravity 中输入：
 
-> 从 https://github.com/mingdewu/commitairtable 下载工程进度同步 Skill。先阅读 README.md，再运行安装脚本，为当前工具安装 engineering-airtable-sync。随后引导我配置 Airtable，令牌只保存在本机。
+> 从 https://github.com/mingdewu/commitairtable 下载工程进度同步 Skill。先阅读 README.md，再运行安装脚本，为当前工具安装 engineering-airtable-sync。Airtable 令牌只能通过本机终端的隐藏输入提示录入；不要让我把令牌发在聊天、网页表单、命令参数或项目文件中。
 
 ### 方式二：通过 Git 下载
 
@@ -40,9 +40,15 @@ python3 scripts/install.py --agent antigravity
 
 在实际项目中告诉 AI 项目的目的和要记录的内容。AI 使用已授权的 PAT 查找可见 Base、查看相关项目及字段，判断归属。匹配不确定时先问你；有合适 Base 就在其中建立项目记录；确实没有合适 Base 时，在你选定的现有工作区创建 Base，并自动建立 Projects、Updates 表和关联字段。随后自动保存本地路由。没有配置页面，也不要求手工建表或编辑 JSON。
 
-PAT 需授予 `data.records:read`、`data.records:write`、`schema.bases:read`、`schema.bases:write` 和相关资源访问；新建 Base 需要目标工作区的 Creator 权限。你可以在对话中提供 PAT，但聊天记录会留存该秘密，测试后建议轮换。AI 不应在回复或日志里复述令牌。若使用安全的本地凭据存储，AI 可直接调用。
+PAT 需授予 `data.records:read`、`data.records:write`、`schema.bases:read`、`schema.bases:write`，并允许访问目标资源；创建 Base 还要求令牌所属账号能在目标工作区创建 Base。首次使用前，在**本机终端**运行以下命令：
 
-Airtable 的 Web API 支持在现有工作区创建 Base。公开 API 文档没有创建 Workspace 的接口；确需新工作区时，AI 可以在已登录的 Airtable 网页中操作，并按你的实际项目范围命名。若未登录或权限不足，需要你完成登录/授权。不能把看不到的 Base 当作不存在。
+```bash
+python3 ~/.codex/skills/engineering-airtable-sync/scripts/credentials.py
+```
+
+Antigravity 的安装目录可替换为 `~/.gemini/config/skills/engineering-airtable-sync/scripts/credentials.py`。macOS 会由 Keychain 自己弹出隐藏输入提示；Linux/WSL 使用终端隐藏输入并把凭据存入权限为 `0600` 的用户配置文件。命令只报告保存成功，不会回显令牌。**不要把令牌发给 AI、粘贴到聊天或网页窗口，也不要放入命令行参数、环境文件或仓库文件。**如果令牌曾经出现在聊天记录中，应先在 Airtable 撤销旧令牌，再用新令牌执行此命令。
+
+Airtable 的 Web API 支持 PAT 在有权限的现有工作区创建 Base；公开 API 没有创建 Workspace 的接口。不能把令牌无权访问的 Base 当作不存在。遇到创建失败时，工具现在会显示 Airtable 返回的 HTTP 状态和错误类型，便于区分令牌 scope、工作区权限、Creator 权限或请求格式问题。
 
 ```bash
 python3 engineering-airtable-sync/scripts/auto.py discover --project /path/to/project --name '实际项目名'
@@ -51,7 +57,7 @@ python3 engineering-airtable-sync/scripts/auto.py provision --project /path/to/p
 python3 engineering-airtable-sync/scripts/auto.py provision --project /path/to/project --mode new-base --target wsp已确认的WorkspaceID --name '已确认的Base名'
 ```
 
-这些命令由 AI 执行。实际项目和保存内容确认后，再预览并同步记录。配置会自动写入本机，不需要用户手工填写。当前支持 PAT；OAuth 一键连接尚未实现。
+发现、Base/表结构创建和项目路由配置由 AI 执行。只有本机令牌初始化需要你在终端输入一次。实际项目和保存内容确认后，再预览并同步记录。当前支持 PAT；OAuth 一键连接尚未实现。
 
 ## 已安装旧版？
 
@@ -63,6 +69,16 @@ python3 scripts/install.py --agent codex --update
 ```
 
 使用 Antigravity 时将 `codex` 替换为 `antigravity`。然后开启新会话，要求自动发现 Airtable 目标；仅更新仓库不会自动更新已复制安装的 Skill。
+
+## 主动规划、任务书和执行跟踪
+
+AI 可以根据想法主动提出方案、架构选择、任务书、关键问题、风险、实验和阶段安排；产出不限于这些类型。信息不足时先提出有用的草案，标注假设，并询问影响方案的关键问题。AI 建议、用户已确认的决定和真实工程进展分别标明。规划本身不代表开发完成。
+
+你可以说：“帮我把这个想法发展成可执行的项目方案，提出不同做法、任务书和关键问题，先在聊天里给我草案。”确认后可批量保存项目概览、任务和过程记录。只想记录一句想法时，也可以保持简洁。
+
+新建结构包含 Projects、Tasks、Updates。Projects 保存可读概览、范围、方案和下一步；Tasks 保存任务说明与验收标准；Updates 使用 Content、Type、Status 展示内容。内部 ID 继续用于可靠同步。
+
+已有项目由 AI 运行 `auto.py upgrade --project <项目路径>`，增补结构并保留旧记录。旧记录正文迁移先运行 `migrate.py --project <项目路径>` 预览，确认后添加 `--apply`。旧界面的列顺序需要另外调整，升级脚本不会自动重新排列视图。任务同步支持稳定 ID、写前冲突检测和部分失败恢复。详细输入见 [规划工作流](engineering-airtable-sync/references/planning.md)。
 
 ## 在项目中使用
 

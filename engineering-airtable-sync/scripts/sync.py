@@ -24,6 +24,9 @@ LOCK = HOME / 'sync.lock'
 FIELDS_PROJECT = {'name': 'Name', 'project_id': 'Project ID', 'stage': 'Current Stage', 'latest': 'Latest Progress', 'blockers': 'Blockers', 'next': 'Next Steps', 'synced': 'Last Synced'}
 FIELDS_UPDATE = {'name': 'Name', 'update_id': 'Update ID', 'project': 'Project', 'completed': 'Completed', 'in_progress': 'In Progress', 'blockers': 'Blockers', 'next': 'Next Steps', 'verification': 'Verification', 'evidence': 'Evidence', 'source': 'Source', 'time': 'Recorded At'}
 
+PLANNING = {'overview': 'Overview', 'goals': 'Goals', 'scope': 'Scope', 'plan': 'Plan', 'open_questions': 'Open Questions', 'planning_status': 'Planning Status'}
+TASK_FIELDS = {'name': 'Name', 'task_id': 'Task ID', 'status': 'Status', 'description': 'Description', 'acceptance': 'Acceptance Criteria', 'phase': 'Phase', 'priority': 'Priority', 'dependencies': 'Dependencies', 'evidence': 'Evidence'}
+
 class SyncError(Exception): pass
 
 def read_json(path, default=None):
@@ -60,8 +63,6 @@ def load_config(project=None):
     return c
 
 def token(c):
-    value = os.environ.get('AIRTABLE_TOKEN')
-    if value: return value
     try:
         p = subprocess.run(['security', 'find-generic-password', '-s', c.get('keychain_service', 'engineering-airtable-sync'), '-w'], capture_output=True, text=True, check=True)
         if p.stdout.strip(): return p.stdout.strip()
@@ -71,7 +72,7 @@ def token(c):
         if secret_path.stat().st_mode & 0o077: raise SyncError('Token file permissions must be 600.')
         value = secret_path.read_text().strip()
         if value: return value
-    raise SyncError('Airtable token unavailable. Airtable credential is unavailable locally; obtain it through the authorized account flow.')
+    raise SyncError('Airtable token unavailable. In a local terminal, run python3 <installed-skill-dir>/scripts/credentials.py to enter it privately. Never paste the token into chat or a browser form.')
 
 class Airtable:
     def __init__(self, config): self.c, self.token = config, token(config)
@@ -143,15 +144,26 @@ def git_snapshot(path, baseline=None):
 def validate_payload(p):
     if not isinstance(p, dict): raise SyncError('Input must be a JSON object.')
     allowed = {'project_name', 'title', 'completed', 'in_progress', 'blockers', 'next_steps', 'verification', 'evidence', 'source', 'current_stage', 'latest_progress', 'record_type', 'content', 'record_status'}
+    allowed |= set(PLANNING) | {'tasks'}
     if set(p) - allowed: raise SyncError('Unknown input fields: ' + ', '.join(sorted(set(p)-allowed)))
+    tasks = p.get('tasks', [])
+    if not isinstance(tasks, list) or len(tasks) > 200: raise SyncError('tasks must be a list of at most 200 tasks.')
+    ids = set()
+    for task in tasks:
+        if not isinstance(task, dict) or set(task) - set(TASK_FIELDS): raise SyncError('Unknown task fields.')
+        if any(not isinstance(v, str) or len(v) > 50000 for v in task.values()): raise SyncError('Task values must be strings of at most 50000 characters.')
+        if any(not task.get(k, '').strip() for k in ('task_id', 'name', 'status', 'description', 'acceptance')): raise SyncError('Each task needs task_id, name, status, description and acceptance.')
+        if task['task_id'] in ids: raise SyncError('Duplicate task_id in input.')
+        ids.add(task['task_id'])
     for k, v in p.items():
+        if k == 'tasks': continue
         if not isinstance(v, str): raise SyncError(f'{k} must be a string.')
         if len(v) > 50000: raise SyncError(f'{k} is too long.')
     kind = p.get('record_type', 'progress')
-    if kind not in ('idea', 'requirement', 'decision', 'progress', 'blocker'): raise SyncError('Invalid record_type.')
+    if kind not in ('idea', 'requirement', 'decision', 'progress', 'blocker', 'plan', 'analysis', 'brief'): raise SyncError('Invalid record_type.')
     body = 'completed' if kind == 'progress' else 'content'
     if kind != 'progress' and not p.get('record_status', '').strip(): raise SyncError('Non-progress records require an explicit record_status.')
-    if kind != 'progress' and any(k in p for k in ('completed','latest_progress','current_stage','in_progress')): raise SyncError('Non-progress notes must not claim completed engineering work.')
+    if kind != 'progress' and any(k in p for k in ('completed','latest_progress','in_progress')): raise SyncError('Non-progress notes must not claim completed engineering work.')
     for k in ('project_name', 'title', body):
         if not p.get(k, '').strip(): raise SyncError(f'{k} is required; no empty progress records.')
     return p
@@ -163,9 +175,11 @@ def project_fields(payload, project_id, timestamp):
         out[f['latest']] = payload.get('latest_progress') or payload['completed']
     for source, key in [('current_stage','stage'), ('blockers','blockers'), ('next_steps','next')]:
         if source in payload: out[f[key]] = payload[source]
+    for source, field in PLANNING.items():
+        if source in payload: out[field] = payload[source]
     return out
 
-def update_fields(payload, update_id, project_record_id, timestamp):
+def update_fields(payload, update_id, project_record_id, timestamp, version=1):
     f = FIELDS_UPDATE
     out = {f['name']: payload['title'], f['update_id']: update_id, f['project']: [project_record_id], f['time']: timestamp}
     kind = payload.get('record_type', 'progress')
@@ -175,14 +189,21 @@ def update_fields(payload, update_id, project_record_id, timestamp):
         out[f['in_progress']] = payload['content']
     for source, key in [('in_progress','in_progress'), ('blockers','blockers'), ('next_steps','next'), ('verification','verification'), ('evidence','evidence'), ('source','source')]:
         if source in payload: out[f[key]] = payload[source]
+    if version >= 2:
+        out['Content'] = payload.get('content') or payload.get('completed', '')
+        out['Type'] = kind
+        out['Status'] = payload.get('record_status', 'recorded')
+        if kind != 'progress': out.pop(f['in_progress'], None)
     return out
 
 def fingerprint(project_id, p, config, evidence=None):
     git_marker = [evidence.get('branch'), evidence.get('head')] if evidence and evidence.get('kind') == 'git' and p.get('record_type', 'progress') == 'progress' else None
-    return hashlib.sha256(json.dumps([config['base_id'], config['projects_table'], config['updates_table'], project_id, p, git_marker], ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return hashlib.sha256(json.dumps([config['base_id'], config['projects_table'], config['updates_table'], config.get('tasks_table'), config.get('schema_version', 1), project_id, p, git_marker], ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 def preview(args, c, state, api):
     payload = validate_payload(read_json(Path(args.input)))
+    if (set(payload) & set(PLANNING) or payload.get('tasks') or payload.get('record_type') in ('plan', 'analysis', 'brief')) and c.get('schema_version', 1) < 2:
+        raise SyncError('Planning requires schema v2. Run auto.py upgrade --project <path> first.')
     identity, root, remote = repo_identity(args.project)
     from project import project_key
     identity = project_key(args.project)
@@ -204,6 +225,15 @@ def preview(args, c, state, api):
     before = {k: existing.get('fields', {}).get(k) for k in pf if k != FIELDS_PROJECT['synced']} if existing else None
     plan_id = 'upd_' + uuid.uuid4().hex
     plan = {'id': plan_id, 'fingerprint': fp, 'config_snapshot': c, 'destination': [c['base_id'], c['projects_table'], c['updates_table']], 'project_id': pid, 'project_root': root, 'project_remote': remote, 'git_evidence': evidence, 'payload': payload, 'timestamp': timestamp, 'project_record_id': existing['id'] if existing else None, 'before': before, 'project_fields': pf, 'project_done': False, 'update_done': False}
+    plan['tasks'] = []
+    for task in payload.get('tasks', []):
+        # Scope task IDs by project; stable across retries and plan revisions.
+        key = pid + ':' + task['task_id']
+        fields = {TASK_FIELDS[k]: v for k, v in task.items()}
+        fields['Task ID'] = key
+        old = api.find(c['tasks_table'], 'Task ID', key)
+        if old and (not existing or old['fields'].get('Project') != [existing['id']]): raise SyncError('Task belongs to another project.')
+        plan['tasks'].append({'fields': fields, 'before': {k: old['fields'].get(k) for k in [*fields, 'Project']} if old else None, 'done': False})
     state['plans'][plan_id] = plan; write_json(STATE, state)
     print(json.dumps({'message': 'Preview only; no Airtable writes', 'plan': plan}, ensure_ascii=False, indent=2))
 
@@ -234,24 +264,39 @@ def apply(args, c, state, api):
             if (current is None) != (plan['before'] is None) or (current and now != plan['before']):
                 raise SyncError('Project changed since preview. Create a fresh preview after inspecting the remote record.')
             current = api.upsert(ptable, pf['project_id'], plan['project_fields'])
+        verified = api.find(ptable, pf['project_id'], plan['project_id'])
+        if not verified or not equal_fields(verified.get('fields', {}), desired): raise SyncError('Project write could not be verified; retry the same plan.')
         plan['project_record_id'] = current['id']; plan['project_done'] = True; write_json(STATE, state)
+    for task in plan.get('tasks', []):
+        if task['done']: continue
+        fields = dict(task['fields'], Project=[plan['project_record_id']])
+        current = api.find(c['tasks_table'], 'Task ID', fields['Task ID'])
+        if not current or not equal_fields(current.get('fields', {}), fields):
+            now = {k: current['fields'].get(k) for k in task['before']} if current and task['before'] is not None else None
+            if (current is None) != (task['before'] is None) or now != task['before']: raise SyncError('Task changed since preview; inspect before retrying.')
+            current = api.upsert(c['tasks_table'], 'Task ID', fields)
+        verified = api.find(c['tasks_table'], 'Task ID', fields['Task ID'])
+        if not verified or not equal_fields(verified.get('fields', {}), fields): raise SyncError('Task write could not be verified; retry the same plan.')
+        task['record_id'] = current['id']; task['done'] = True; write_json(STATE, state)
     if not plan['update_done']:
         existing = api.find(utable, uf['update_id'], plan['id'])
-        fields = update_fields(plan['payload'], plan['id'], plan['project_record_id'], plan['timestamp'])
+        fields = update_fields(plan['payload'], plan['id'], plan['project_record_id'], plan['timestamp'], c.get('schema_version', 1))
         if existing:
             if not equal_fields(existing.get('fields', {}), fields):
                 raise SyncError('Existing work record differs from this plan; inspect it before retrying.')
             record = existing
         else: record = api.upsert(utable, uf['update_id'], fields)
+        verified = api.find(utable, uf['update_id'], plan['id'])
+        if not verified or not equal_fields(verified.get('fields', {}), fields): raise SyncError('Update write could not be verified; retry the same plan.')
         plan['update_record_id'] = record['id']; plan['update_done'] = True; write_json(STATE, state)
     evidence = plan.get('git_evidence', {})
-    if evidence.get('kind') == 'git' and evidence.get('branch') and evidence.get('head'):
+    if plan['payload'].get('record_type', 'progress') == 'progress' and evidence.get('kind') == 'git' and evidence.get('branch') and evidence.get('head'):
         current = git_snapshot(plan['project_root'])
         if current.get('branch') == evidence['branch'] and current.get('head') == evidence['head']:
             state.setdefault('baselines', {}).setdefault(plan['project_id'], {})[evidence['branch']] = evidence['head']
             write_json(STATE, state)
     base = c['base_id']
-    print(json.dumps({'status': 'synced', 'plan_id': plan['id'], 'project_record_id': plan['project_record_id'], 'update_record_id': plan['update_record_id'], 'baseline_status': plan.get('git_evidence', {}).get('baseline_status'), 'project_url': f'https://airtable.com/{base}/{ptable}/{plan["project_record_id"]}', 'update_url': f'https://airtable.com/{base}/{utable}/{plan["update_record_id"]}'}, ensure_ascii=False, indent=2))
+    print(json.dumps({'status': 'synced', 'plan_id': plan['id'], 'project_record_id': plan['project_record_id'], 'update_record_id': plan['update_record_id'], 'tasks': [{'record_id': t['record_id'], 'url': f"https://airtable.com/{base}/{c['tasks_table']}/{t['record_id']}"} for t in plan.get('tasks', [])], 'baseline_status': plan.get('git_evidence', {}).get('baseline_status'), 'project_url': f'https://airtable.com/{base}/{ptable}/{plan["project_record_id"]}', 'update_url': f'https://airtable.com/{base}/{utable}/{plan["update_record_id"]}'}, ensure_ascii=False, indent=2))
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

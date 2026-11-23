@@ -40,7 +40,7 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(api.writes,n);self.assertEqual(api.base_creates,1)
     def test_existing_base_no_base_create(self):
         api=FakeMeta();setup.bootstrap(api,'existing','https://airtable.com/appTest/tblAnything','')
-        self.assertEqual(api.base_creates,0);self.assertEqual(len(api.tables),2)
+        self.assertEqual(api.base_creates,0);self.assertEqual(len(api.tables),3)
     def test_wrong_field_type_is_not_modified(self):
         api=FakeMeta();setup.bootstrap(api,'existing','appTest','')
         api.tables[0]['fields'][1]['type']='number';n=api.writes
