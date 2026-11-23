@@ -1,0 +1,14 @@
+---
+name: engineering-airtable-sync
+description: Summarize verified progress in the current engineering project and preview or sync it to the user's Airtable engineering tracker. Use when the user asks to record or sync project progress to Airtable.
+---
+
+# Sync engineering progress to Airtable
+
+Use the bundled `scripts/sync.py` through Python 3.9 or later. Resolve it relative to this skill directory. Read [references/setup.md](references/setup.md) for first-time Airtable setup and field schema if configuration is missing; never ask the user to paste an access token into chat.
+
+1. Identify the current project from the working directory. Collect only evidence relevant to the requested scope: current conversation, Git status and recent commits, and project documentation as available. Do not assume access to other chats. Distinguish planned work, uncommitted changes, committed work, test results and deployment; never claim validation that did not happen. Ask for clarification if project identity is ambiguous. Avoid sending code, credentials, private data or entire conversation transcripts.
+2. Check for substantive progress. If none is confirmed, say so and do not create a record. Create a JSON input file in a private temporary directory with string fields `project_name`, `title`, `completed` (required), and where supported by evidence `in_progress`, `blockers`, `next_steps`, `verification`, `evidence`, `source`, `current_stage`, `latest_progress`. `completed` may describe a confirmed work update even when it is unfinished; identify its status clearly. Omit unknown fields; an empty optional field explicitly clears that AI-managed field. Evidence should be brief paths, commit IDs, or test outcomes. Do not invent blockers, dates, owners, or completion.
+3. Run `python3 <skill-dir>/scripts/sync.py preview --project <project-directory> --input <json-file>` and inspect the resulting plan, current project, and proposed changes. The preview reads Airtable but does not write it. If it returns an existing plan for identical content, use that plan; a completed one is already synced. Respect an explicit request for preview only.
+4. If the user requested synchronization and the project mapping and changes are clear, run `python3 <skill-dir>/scripts/sync.py apply <plan-id>`. If the destination or facts are ambiguous, ask the user before applying. If a write fails or is ambiguous, retain and retry the same plan ID after resolving the error; report partial results accurately. Do not create a replacement plan just to retry. On a conflict, inspect the current Airtable record and create a fresh preview using `preview --refresh` with corrected facts; do not overwrite a human edit blindly.
+5. Report what was recorded, verification limits, and the returned Airtable links. If not configured, explain setup using references/setup.md and offer the user the exact missing non-secret settings. Delete the temporary input after use.
