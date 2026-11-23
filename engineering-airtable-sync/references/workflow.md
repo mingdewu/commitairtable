@@ -6,6 +6,7 @@ Commands are run by the agent; users provide intent and authorization. Paths are
 
 ```bash
 python3 scripts/project.py info --project /path/to/project
+python3 scripts/project.py link-path --source-key /confirmed/canonical/identity --project /new/clone/or/moved/path
 python3 scripts/project.py enable-reminders --project /path/to/project
 python3 scripts/project.py discover --project /path/to/project
 python3 scripts/project.py discover --project /path/to/project --base-id appSelected
@@ -57,3 +58,11 @@ Preview stores the destination/config snapshot. Apply follows that snapshot, nev
 - API 403 during search: explain missing access; do not create a replacement Base.
 - User declines a milestone reminder: continue engineering without a write or repeated nagging.
 - A code change without tests: report implemented/unverified, never tested or deployed.
+
+## Git baselines and recovery
+
+A confirmed two-record sync advances `state.json` baselines for its Project ID and current branch, only if branch and HEAD still match the preview. Each preview reports `git_evidence` with branch, HEAD, dirty flag and baseline status. `ancestor` includes up to 100 commit IDs since the baseline. `initial`, `diverged_or_missing`, `unborn_head` and `not_applicable` require caution: do not infer all work since last sync from Git in those cases. Uncommitted changes are not part of the commit baseline. Compare actual files and current conversation separately.
+
+`project.py link-path` explicitly aliases another checkout, a moved Git repository, or a renamed non-Git directory to an existing canonical project identity. It preserves routes, project ID, and branch baselines. Obtain source key from `project.py info`; it can be used even after the old path is gone. Rebinding another project is refused.
+
+`sync.py plan <plan-id>` shows the saved destination, pre-write snapshot and which Airtable steps are confirmed. Apply retries the same plan, queries by stable IDs and stops if remote project fields changed since preview. A changed destination route does not redirect an old plan. After resolving a conflict, review remote content and use `preview --refresh` for a new plan if no write has started.

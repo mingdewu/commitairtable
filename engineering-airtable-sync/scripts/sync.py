@@ -105,16 +105,40 @@ class Airtable:
     def upsert(self, table, key, fields):
         return self.request(table, 'PATCH', {'performUpsert': {'fieldsToMergeOn': [key]}, 'records': [{'fields': fields}]})['records'][0]
 
+def git_output(path, *args):
+    try:
+        return subprocess.run(['git', '-C', str(path), *args], capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ''
+
 def repo_identity(path):
     p = Path(path).expanduser().resolve()
-    def git(*args):
-        try: return subprocess.run(['git', '-C', str(p), *args], capture_output=True, text=True, check=True).stdout.strip()
-        except (OSError, subprocess.CalledProcessError): return ''
-    root = git('rev-parse', '--show-toplevel')
-    common = git('rev-parse', '--git-common-dir')
-    # A common Git directory unifies worktrees on the same machine; no remote-based auto-merge.
-    identity = str((p / common).resolve()) if root and common else str(p)
-    return identity, root or str(p), git('remote', 'get-url', 'origin')
+    root = git_output(p, 'rev-parse', '--show-toplevel')
+    if not root:
+        return str(p), str(p), ''
+    common = git_output(p, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    identity = str(Path(common).resolve()) if common else str(Path(root).resolve() / '.git')
+    return identity, root, git_output(p, 'remote', 'get-url', 'origin')
+
+def git_snapshot(path, baseline=None):
+    p = Path(path).expanduser().resolve()
+    root = git_output(p, 'rev-parse', '--show-toplevel')
+    if not root:
+        return {'kind': 'directory', 'root': str(p), 'baseline_status': 'not_applicable'}
+    branch = git_output(p, 'symbolic-ref', '--quiet', '--short', 'HEAD') or None
+    head = git_output(p, 'rev-parse', 'HEAD') or None
+    result = {'kind': 'git', 'root': root, 'branch': branch, 'head': head,
+              'dirty': bool(git_output(p, 'status', '--porcelain')), 'baseline': baseline}
+    if not baseline:
+        result['baseline_status'] = 'initial'
+    elif not head:
+        result['baseline_status'] = 'unborn_head'
+    elif subprocess.run(['git', '-C', str(p), 'merge-base', '--is-ancestor', baseline, head], capture_output=True).returncode == 0:
+        result['baseline_status'] = 'ancestor'
+        result['commits_since_baseline'] = git_output(p, 'log', '--format=%H', baseline + '..' + head).splitlines()[:100]
+    else:
+        result['baseline_status'] = 'diverged_or_missing'
+    return result
 
 def validate_payload(p):
     if not isinstance(p, dict): raise SyncError('Input must be a JSON object.')
@@ -153,16 +177,22 @@ def update_fields(payload, update_id, project_record_id, timestamp):
         if source in payload: out[f[key]] = payload[source]
     return out
 
-def fingerprint(project_id, p, config):
-    return hashlib.sha256(json.dumps([config['base_id'], config['projects_table'], config['updates_table'], project_id, p], ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+def fingerprint(project_id, p, config, evidence=None):
+    git_marker = [evidence.get('branch'), evidence.get('head')] if evidence and evidence.get('kind') == 'git' and p.get('record_type', 'progress') == 'progress' else None
+    return hashlib.sha256(json.dumps([config['base_id'], config['projects_table'], config['updates_table'], project_id, p, git_marker], ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 def preview(args, c, state, api):
     payload = validate_payload(read_json(Path(args.input)))
     identity, root, remote = repo_identity(args.project)
+    from project import project_key
+    identity = project_key(args.project)
     projects = state.setdefault('projects', {})
     if identity not in projects: projects[identity] = {'project_id': 'proj_' + uuid.uuid4().hex, 'root': root, 'remote': remote}
     project = projects[identity]; pid = project['project_id']
-    fp = fingerprint(pid, payload, c)
+    branch = git_output(root, 'symbolic-ref', '--quiet', '--short', 'HEAD') or None
+    baseline = state.setdefault('baselines', {}).get(pid, {}).get(branch) if branch else None
+    evidence = git_snapshot(root, baseline)
+    fp = fingerprint(pid, payload, c, evidence)
     # Identical payloads are intentionally no-ops; edit content to report genuinely new work.
     for plan in state.setdefault('plans', {}).values():
         if plan['fingerprint'] == fp and not (args.refresh and not plan['project_done']):
@@ -173,7 +203,7 @@ def preview(args, c, state, api):
     # Only guard fields the plan intends to modify, not unrelated human-owned fields.
     before = {k: existing.get('fields', {}).get(k) for k in pf if k != FIELDS_PROJECT['synced']} if existing else None
     plan_id = 'upd_' + uuid.uuid4().hex
-    plan = {'id': plan_id, 'fingerprint': fp, 'config_snapshot': c, 'destination': [c['base_id'], c['projects_table'], c['updates_table']], 'project_id': pid, 'project_root': root, 'project_remote': remote, 'payload': payload, 'timestamp': timestamp, 'project_record_id': existing['id'] if existing else None, 'before': before, 'project_fields': pf, 'project_done': False, 'update_done': False}
+    plan = {'id': plan_id, 'fingerprint': fp, 'config_snapshot': c, 'destination': [c['base_id'], c['projects_table'], c['updates_table']], 'project_id': pid, 'project_root': root, 'project_remote': remote, 'git_evidence': evidence, 'payload': payload, 'timestamp': timestamp, 'project_record_id': existing['id'] if existing else None, 'before': before, 'project_fields': pf, 'project_done': False, 'update_done': False}
     state['plans'][plan_id] = plan; write_json(STATE, state)
     print(json.dumps({'message': 'Preview only; no Airtable writes', 'plan': plan}, ensure_ascii=False, indent=2))
 
@@ -214,8 +244,14 @@ def apply(args, c, state, api):
             record = existing
         else: record = api.upsert(utable, uf['update_id'], fields)
         plan['update_record_id'] = record['id']; plan['update_done'] = True; write_json(STATE, state)
+    evidence = plan.get('git_evidence', {})
+    if evidence.get('kind') == 'git' and evidence.get('branch') and evidence.get('head'):
+        current = git_snapshot(plan['project_root'])
+        if current.get('branch') == evidence['branch'] and current.get('head') == evidence['head']:
+            state.setdefault('baselines', {}).setdefault(plan['project_id'], {})[evidence['branch']] = evidence['head']
+            write_json(STATE, state)
     base = c['base_id']
-    print(json.dumps({'status': 'synced', 'plan_id': plan['id'], 'project_record_id': plan['project_record_id'], 'update_record_id': plan['update_record_id'], 'project_url': f'https://airtable.com/{base}/{ptable}/{plan["project_record_id"]}', 'update_url': f'https://airtable.com/{base}/{utable}/{plan["update_record_id"]}'}, ensure_ascii=False, indent=2))
+    print(json.dumps({'status': 'synced', 'plan_id': plan['id'], 'project_record_id': plan['project_record_id'], 'update_record_id': plan['update_record_id'], 'baseline_status': plan.get('git_evidence', {}).get('baseline_status'), 'project_url': f'https://airtable.com/{base}/{ptable}/{plan["project_record_id"]}', 'update_url': f'https://airtable.com/{base}/{utable}/{plan["update_record_id"]}'}, ensure_ascii=False, indent=2))
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -223,10 +259,15 @@ def main():
     pre = sub.add_parser('preview'); pre.add_argument('--input', required=True); pre.add_argument('--project', default='.'); pre.add_argument('--refresh', action='store_true', help='refresh a preview after a conflict before project write')
     ap = sub.add_parser('apply'); ap.add_argument('plan_id')
     status_parser = sub.add_parser('status'); status_parser.add_argument('--project')
+    plan_parser = sub.add_parser('plan'); plan_parser.add_argument('plan_id')
     args = parser.parse_args()
     try:
         with locked():
             state = read_json(STATE, {'projects': {}, 'plans': {}})
+            if args.cmd == 'plan':
+                plan = state.get('plans', {}).get(args.plan_id)
+                if not plan: raise SyncError('Unknown plan ID.')
+                print(json.dumps({'plan': plan, 'recovery': 'If partially written, retry apply with the same plan ID after inspecting the remote change.'}, ensure_ascii=False, indent=2)); return 0
             if args.cmd == 'apply':
                 c = state.get('plans', {}).get(args.plan_id, {}).get('config_snapshot') or load_config()
             else:

@@ -120,14 +120,15 @@ python3 engineering-airtable-sync/scripts/sync.py apply upd_预览返回的ID
 
 预览保存本地计划，不写入 Airtable。同一项目的相同输入复用同一计划，重复 apply 不新增记录。两张表的写入不是事务；部分失败或请求结果未知时，修复故障后使用**同一计划 ID**重试。项目字段在预览后被修改会停止；检查远端内容后，使用修正后的输入和 `preview --refresh` 生成新预览。已开始写入的计划优先使用原计划恢复。
 
-## 换电脑与限制
+## 多项目、多路径与同步基线
 
-- Skill 可以重新下载；在新电脑上重新配置令牌和相同的 Base、表 ID，即可继续使用同一个 Airtable。
-- 同一项目换电脑或重新 clone 后，请让 AI 查找原 Base 中的项目，并使用其 Project ID 重新绑定。未绑定时本地路径会产生新身份，因此不要直接创建同名项目。
-- 本机的 `~/.config/engineering-airtable-sync/state.json` 保存项目绑定、同步计划和摘要。请勿上传至公开仓库。
-- 项目按本机 Git common directory 或非 Git 文件夹识别。同一仓库的 worktree 共用身份；不按项目名称自动合并。
-- 同步只修改列出的 AI 管理字段。负责人、优先级、截止日期等应另建人工字段。不保证跨电脑并发写入安全。
-- 当前本地测试已通过；真实 Airtable 的首次连接和同步仍需完成。
+Codex 和 Antigravity 可安装同一份 Skill。项目绑定与同步状态保存在当前电脑的用户配置目录，两个工具共享。一个项目可有多个本地路径：同一仓库的 worktree 自动共用项目身份；另外一次 clone、移动仓库或重命名无 Git 目录时，先用 `project.py info` 找到原项目 key，再让 AI 运行 `project.py link-path --source-key <原项目key> --project <新路径>`。这一步会复用原 Project ID、Airtable 目标和基线，不按项目名称猜测。不同项目可绑定不同 Base。
+
+每次 Airtable 项目概览和工作记录都确认写入后，记录当前 Git 分支的 HEAD 为同步基线。预览会显示分支、HEAD、未提交变更及旧基线是否仍属于当前历史。新分支、变基或历史改写后，AI 要核实比较范围，不能把全部差异直接当成新增进展。无 Git 项目可以用明确的对话与文档事实同步，但没有 Git 基线。
+
+发生冲突或部分失败时，运行 `sync.py plan <计划ID>` 检查目标和已确认步骤；恢复使用同一计划 ID。预览后的人工修改会阻止覆盖。只在两张表都确认成功、且分支与 HEAD 未变化时推进 Git 基线。
+
+跨电脑时先查找原 Airtable 项目并绑定其 Project ID；本机状态不会自动在设备间同步。多个设备同时写入同一项目仍有竞争风险，需检查远端冲突。
 
 ## 开发验证
 

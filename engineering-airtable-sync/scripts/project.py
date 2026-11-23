@@ -4,12 +4,31 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from sync import HOME, CONFIG, SyncError, read_json, write_json, locked, repo_identity, token
+from sync import HOME, CONFIG, STATE, SyncError, read_json, write_json, locked, repo_identity, token
 from setup import MetaAPI
 
 ROUTES = HOME / 'project-routes.json'
 
-def project_key(path): return repo_identity(path)[0]
+def project_key(path):
+    raw = repo_identity(path)[0]
+    return read_json(ROUTES, {}).get('_aliases', {}).get(raw, raw)
+
+def link_path(source_key, target):
+    routes = read_json(ROUTES, {})
+    state = read_json(STATE, {'projects': {}, 'plans': {}})
+    if source_key not in routes and source_key not in state.get('projects', {}):
+        raise SyncError('Source project identity has no saved route or project. Use project.py info to inspect it.')
+    target_raw = repo_identity(target)[0]
+    existing = routes.get('_aliases', {}).get(target_raw, target_raw)
+    if existing != target_raw and existing != source_key:
+        raise SyncError('Target path already belongs to another project.')
+    if target_raw in state.get('projects', {}) and target_raw != source_key:
+        raise SyncError('Target path already has a different project identity.')
+    if target_raw in routes and target_raw != source_key:
+        raise SyncError('Target path already has its own route.')
+    routes.setdefault('_aliases', {})[target_raw] = source_key
+    write_json(ROUTES, routes)
+    return {'source_key': source_key, 'target_identity': target_raw, 'canonical_project_key': source_key}
 
 def destination(path):
     route = read_json(ROUTES, {}).get(project_key(path), {})
@@ -58,20 +77,23 @@ def list_bases(api):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     sub=p.add_subparsers(dest='cmd', required=True)
-    for name in ['info','enable-reminders','discover','bind']:
+    for name in ['info','enable-reminders','discover','bind','link-path']:
         q=sub.add_parser(name);q.add_argument('--project', default='.')
         if name=='discover': q.add_argument('--base-id')
+        if name=='link-path': q.add_argument('--source-key', required=True)
         if name=='bind':
             q.add_argument('--base-id',required=True)
             q.add_argument('--project-id',help='Existing tracker Project ID, selected by the user')
     args=p.parse_args()
     try:
         with locked():
+            if args.cmd=='link-path':
+                print(json.dumps(link_path(args.source_key, args.project),ensure_ascii=False));return
             if args.cmd=='enable-reminders':
                 print(json.dumps({'instructions_file':enable_reminders(args.project),'activation':'Current agent must read AGENTS.md; other hosts may require their own persistent rule integration.'}));return
             cpath=destination(args.project)
             if args.cmd=='info':
-                print(json.dumps({'project_identity':project_key(args.project),'config_path':str(cpath),'configured':cpath.exists(),'preferences':read_json(ROUTES,{}).get(project_key(args.project),{})},ensure_ascii=False));return
+                print(json.dumps({'project_identity':project_key(args.project),'config_path':str(cpath),'configured':cpath.exists(),'preferences':read_json(ROUTES,{}).get(project_key(args.project),{}),'git':repo_identity(args.project)[1:]},ensure_ascii=False));return
             api=MetaAPI(token(read_json(cpath, {})))
             if args.cmd=='discover':
                 if not args.base_id:
