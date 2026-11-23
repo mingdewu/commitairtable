@@ -49,7 +49,7 @@ python3 ~/.gemini/config/skills/engineering-airtable-sync/scripts/credentials.py
 
 > 帮我把这个想法发展成项目方案，提出可选做法、关键问题和任务拆解。先给我草案，确认后再保存到 Airtable。
 
-Skill 会查看当前项目资料，提出方案与任务；不确定的地方会标注并向你提问。它会区分 AI 建议、你确认的决定和已完成的工作。保存前会给你预览，得到确认后写入 Airtable。
+Skill 会查看当前项目资料，提出方案与任务；不确定的地方会标注并向你提问。它会区分 AI 建议、你确认的决定和已完成的工作。每次有实质性项目想法或进展，回复末尾都会问你是否要预览并保存到 Airtable；你确认具体预览后才会写入。同一事项如果你拒绝，不会重复追问。
 
 新项目会使用 `Projects`、`Tasks`、`Updates` 三张表。若目标 Workspace 中没有合适的 Base，Skill 可以在确认后创建 Base 和表结构。现有项目可以追加规划字段和 Tasks 表；请让 Skill 执行结构升级。升级会保留已有记录，不会自动改变 Airtable 视图的列顺序。
 
