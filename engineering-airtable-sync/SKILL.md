@@ -1,14 +1,39 @@
 ---
 name: engineering-airtable-sync
-description: Summarize verified progress in the current engineering project and preview or sync it to the user's Airtable engineering tracker. Use when the user asks to record or sync project progress to Airtable.
+description: Clarify and record engineering ideas, requirements, decisions, progress and blockers in Airtable across any project. Use when asked to manage project progress, enable milestone reminders, choose an Airtable project destination, or preview and save a project update.
 ---
 
-# Sync engineering progress to Airtable
+# Universal engineering recorder
 
-Use the bundled `scripts/sync.py` through Python 3.9 or later. Resolve it relative to this skill directory. Read [references/setup.md](references/setup.md) when setup is missing. Start `python3 <skill-dir>/scripts/setup.py` as a persistent local process, give the returned local browser link to the user, and wait for setup completion. The wizard creates the Base/tables and saves credentials and configuration. Ask the user only to authorize access, enter their PAT on the local page, and identify the workspace or existing Base. Help find that target in their authorized browser when available. Do not delegate table creation, shell commands, or JSON editing to the user. Never ask for a token in chat. If installed code predates this wizard, update from the repository before setup. Stop the wizard process after configuration is saved or the user cancels.
+Domain-neutral: illustrations, hypothetical examples and suggested features are not facts about the user's actual project. Never instantiate an example project or infer an industry from documentation. Use the user's chosen language.
 
-1. Identify the current project from the working directory. Collect only evidence relevant to the requested scope: current conversation, Git status and recent commits, and project documentation as available. Do not assume access to other chats. Distinguish planned work, uncommitted changes, committed work, test results and deployment; never claim validation that did not happen. Ask for clarification if project identity is ambiguous. Avoid sending code, credentials, private data or entire conversation transcripts.
-2. Check for substantive progress. If none is confirmed, say so and do not create a record. Create a JSON input file in a private temporary directory with string fields `project_name`, `title`, `completed` (required), and where supported by evidence `in_progress`, `blockers`, `next_steps`, `verification`, `evidence`, `source`, `current_stage`, `latest_progress`. `completed` may describe a confirmed work update even when it is unfinished; identify its status clearly. Omit unknown fields; an empty optional field explicitly clears that AI-managed field. Evidence should be brief paths, commit IDs, or test outcomes. Do not invent blockers, dates, owners, or completion.
-3. Run `python3 <skill-dir>/scripts/sync.py preview --project <project-directory> --input <json-file>` and inspect the resulting plan, current project, and proposed changes. The preview reads Airtable but does not write it. If it returns an existing plan for identical content, use that plan; a completed one is already synced. Respect an explicit request for preview only.
-4. If the user requested synchronization and the project mapping and changes are clear, run `python3 <skill-dir>/scripts/sync.py apply <plan-id>`. If the destination or facts are ambiguous, ask the user before applying. If a write fails or is ambiguous, retain and retry the same plan ID after resolving the error; report partial results accurately. Do not create a replacement plan just to retry. On a conflict, inspect the current Airtable record and create a fresh preview using `preview --refresh` with corrected facts; do not overwrite a human edit blindly.
-5. Report what was recorded, verification limits, and the returned Airtable links. If not configured, follow the browser wizard flow above; do not send the user the manual configuration checklist. Delete the temporary input after use.
+## Understand before preparing records
+
+1. Identify the actual project, requested outcome, record type (`idea`, `requirement`, `decision`, `progress`, `blocker`) and status. Use available current conversation, relevant project documents and Git evidence; do not claim access to other conversations. Distinguish a plan from implementation, tests and deployment.
+2. If purpose, scope, destination or status is materially uncertain, ask one to three focused questions, then restate the understanding. Do not invent features, owners, deadlines, percentages, decisions or verification. A one-sentence request can be sufficient if unambiguous; length is not a confidence measure.
+3. Do not save an ambiguous requirement as settled. If the user explicitly wants a rough idea preserved, quote/paraphrase only what was supplied, label it tentative / pending clarification, and include unanswered questions. Collect only details necessary for the intended record; do not force a full specification to preserve a simple note.
+4. With no substantive new information, do not create a new record. Compare recent context and existing project information to avoid paraphrasing an old update as new progress.
+
+## Optional ongoing reminders
+
+Only when the user asks to enable ongoing project management, run `python3 <skill-dir>/scripts/project.py enable-reminders --project <path>`. This appends a bounded section to the project's AGENTS.md, preserving existing instructions. Read that section in the current session. If the host does not read AGENTS.md, integrate the same instruction through its supported project rules when available, otherwise explain the limitation. Do not promise a background watcher or guaranteed cross-host execution.
+
+Offer a brief reminder after a meaningful requirement, decision, feature, fix, verification, release or blocker; group small edits, avoid interrupting ongoing implementation, and don't repeat a declined reminder without new progress. A reminder is not permission to write. Git commit, Git push and Airtable recording are separate operations; clarify ambiguous “Git/Airtable” requests. This skill does not automatically commit or push code.
+
+## Resolve destination
+
+Read [references/workflow.md](references/workflow.md) for commands and payload format. Start with `project.py info --project <path>` and use a confirmed existing binding. Otherwise discover authorized Bases and candidate Projects records. Search results are candidates: similar names alone are not enough to bind. Ask the user to choose when multiple destinations fit. Permission errors or incomplete visibility do not mean a Base does not exist.
+
+Prefer a compatible existing Base, creating a new project record inside it when needed. A new project does not automatically require a new Base. Only propose creating a Base if no appropriate authorized destination is found and the user agrees to the concrete new name and workspace. For an existing project on a new machine, bind its stable Project ID; never merge by name silently.
+
+If initialization is needed, read [references/setup.md](references/setup.md) and launch `python3 <skill-dir>/scripts/setup.py --project <path>` as a persistent process. Give the local browser URL to the user. The wizard creates the confirmed schema and saves credentials/configuration; the user authorizes access and enters the token locally. Do not ask the user to manually build tables, run commands, edit JSON or paste a token into chat. Stop the wizard after setup or cancellation. A broad PAT may see multiple Bases; never widen permissions automatically.
+
+## Preview, confirm, save
+
+Create minimal JSON in a private temporary location using the workflow reference. Run `sync.py preview --project <path> --input <file>`. This reads remote data but does not write it. Present the actual Base/project, record type/status, exact substantive content, and proposed project-field changes. Explain whether a project will be created or updated. Wait for the user's confirmation of this concrete proposal before `sync.py apply <plan-id>`. General permission to remind or manage a project does not approve a specific record. If the user changes the content, preview the revision before confirmation. A user's confirmation in the current conversation applies only to that plan and its retries.
+
+For corrections, preserve history by appending a clearly identified correction/decision referencing the prior record, and update current overview only if justified. Do not silently rewrite previous historical notes. If requested to edit a specific historical record in place, explain that this CLI currently appends corrections and obtain the user's choice rather than claiming an edit occurred.
+
+Keep code, secrets, personal data and full transcripts out of records. Protect human-owned fields. On partial failure or uncertain network outcomes, report confirmed steps and retry the same plan ID after resolving the cause. On conflict inspect the remote change before using `preview --refresh`; don't overwrite human edits blindly.
+
+Return in the chat: destination Base/project, records added, project fields changed, what progress or understanding was recorded, unresolved questions/verification limits, and real record links. Never call an idea completed work. If nothing was saved or only part succeeded, say so. Remove private temporary input after use.

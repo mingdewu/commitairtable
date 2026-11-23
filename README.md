@@ -1,6 +1,6 @@
 # Engineering Airtable Sync｜工程进度同步 Skill
 
-在任意本地项目中，使用 Codex 或 Antigravity 整理有证据的开发进展，写入 Airtable。首次同步创建项目，之后更新项目概览并保留工作记录。外贸系统、电商、网站和内部工具等新项目均可使用，无需已有类似项目。
+在任意本地项目中，使用 Codex 或 Antigravity 整理有证据的开发进展，写入 Airtable。首次同步创建项目，之后更新项目概览并保留工作记录。适用于任意工程和业务领域；说明中的示例不是用户实际项目，不会被自动建立为项目。
 
 ## 从 GitHub 下载和安装
 
@@ -52,7 +52,7 @@ AI 会运行 `engineering-airtable-sync/scripts/setup.py`，打开只在本机�
 
 首次自动建表需要 `data.records:read`、`data.records:write`、`schema.bases:read`、`schema.bases:write`。创建 Base 还需要目标工作区的 Creator 权限，PAT 需覆盖该工作区的当前及未来 Base。仅连接已有 Base 时，可将 PAT 资源限制为该 Base。初始化后可撤掉 `schema.bases:write`，日常同步只使用记录读写。
 
-macOS 令牌保存在钥匙串；Linux / WSL 保存在本机权限 600 的令牌文件（未加密）。配置文件由向导自动生成，内容仅含非秘密 ID。每位使用者都需要自己的授权；当前采用 PAT，尚未实现 OAuth 一键授权。向导验证表结构和记录读取，实际记录写入由首次真实同步验证。
+macOS 令牌保存在钥匙串；Linux / WSL 保存在本机权限 600 的令牌文件（未加密）。配置文件由向导自动生成，内容仅含非秘密 ID。多个项目共用本机令牌，令牌须覆盖所选 Base。每位使用者都需要自己的授权；当前采用 PAT，尚未实现 OAuth 一键授权。向导验证表结构和记录读取，实际记录写入由首次真实同步验证。
 
 如果已有配置，AI 应先检查连接，不覆盖现有目标。遇到创建请求中断，先检查 Airtable 是否已创建 Base，再通过已有 Base 链接恢复，避免重复创建。详细权限和手工排查见 [首次配置说明](engineering-airtable-sync/references/setup.md)。
 
@@ -73,9 +73,9 @@ python3 scripts/install.py --agent codex --update
 
 > 使用 engineering-airtable-sync，把这次项目进展同步到 Airtable。
 
-新项目示例：
+新项目示例（项目名和内容由你实际指定，任何行业均可）：
 
-> 使用 engineering-airtable-sync。这个新项目叫“外贸客户管理系统”，用于管理海外客户、询盘和报价。把这次已确认的开发进展同步到 Airtable。
+> 这是一个新项目。先和我确认要解决的问题、目标用户及第一阶段范围，再预览拟保存的需求，得到我的确认后再保存。
 
 只预览：
 
@@ -83,17 +83,33 @@ python3 scripts/install.py --agent codex --update
 
 Skill 根据当前对话、Git 和可见项目文档整理事实，区分已实现、已测试和已部署。没有确认的新进展时不应创建空记录。不会天然读取其他 AI 工具的历史会话。
 
+## 通用管理流程
+
+接收想法或重要进展 → 检查理解是否充分 → 必要时提问 → 确定 Base 和项目 → 展示拟保存内容 → 用户确认 → 保存 → 聊天返回变化及链接。
+
+支持想法、已确认需求、决定、工作进展和阻塞。想法不会写成已完成开发。信息含糊时先澄清；用户明确要求保留初步想法时，可标为待澄清并保留问题。每次写入前必须确认具体内容和目标。
+
+启用提醒：
+
+> 为当前项目启用工程进度管理，重要需求、决定或修改完成后，提醒我是否记录到 Airtable。
+
+AI 会向项目 AGENTS.md 追加提醒约定。提醒依赖当前工具读取并遵循项目指令；不是后台监控，不能保证所有工具自动触发。不读取 AGENTS.md 的工具需由 AI 配置其支持的项目规则。Git 提交、推送和 Airtable 保存分别处理。零碎修改合并提醒，拒绝后不反复追问。
+
+未绑定的项目可以查找已授权 Base 和现有项目，由用户确认归属后绑定。有合适 Base 时在其中建项目；只有用户确认没有合适归属并选择工作区后才新建 Base。权限不足不视为不存在。多个项目可绑定不同 Base；PAT 必须有相应访问权限。
+
+历史内容修改采用新增更正记录并引用原记录，保留历史；当前概览可更新。本版尚不提供历史记录原地编辑命令。具体命令和数据格式见 [工作流说明](engineering-airtable-sync/references/workflow.md)。
+
 ## 手工同步与故障恢复
 
 创建 JSON 输入文件，所有字段均为字符串。例如：
 
 ```json
 {
-  "project_name": "外贸客户管理系统",
-  "title": "实现客户列表页面",
-  "completed": "已实现客户列表，尚未部署",
+  "project_name": "用户指定的项目",
+  "title": "完成已确认的功能",
+  "completed": "已实现约定功能，尚未部署",
   "verification": "本地构建通过，尚未进行线上验证",
-  "evidence": "src/customers/ 下的页面变更",
+  "evidence": "实际变更文件及提交证据",
   "source": "Codex"
 }
 ```
@@ -110,7 +126,7 @@ python3 engineering-airtable-sync/scripts/sync.py apply upd_预览返回的ID
 ## 换电脑与限制
 
 - Skill 可以重新下载；在新电脑上重新配置令牌和相同的 Base、表 ID，即可继续使用同一个 Airtable。
-- **同一项目换电脑或重新 clone，当前版本会识别为新项目，可能创建另一条项目记录。** 本版还没有跨电脑项目重新绑定功能；已有项目迁移需要人工调整本地绑定。新电脑上的全新项目不受此限制。
+- 同一项目换电脑或重新 clone 后，请让 AI 查找原 Base 中的项目，并使用其 Project ID 重新绑定。未绑定时本地路径会产生新身份，因此不要直接创建同名项目。
 - 本机的 `~/.config/engineering-airtable-sync/state.json` 保存项目绑定、同步计划和摘要。请勿上传至公开仓库。
 - 项目按本机 Git common directory 或非 Git 文件夹识别。同一仓库的 worktree 共用身份；不按项目名称自动合并。
 - 同步只修改列出的 AI 管理字段。负责人、优先级、截止日期等应另建人工字段。不保证跨电脑并发写入安全。

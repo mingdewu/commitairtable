@@ -49,8 +49,12 @@ def locked():
         fcntl.flock(f, fcntl.LOCK_EX)
         yield
 
-def load_config():
-    c = read_json(CONFIG)
+def load_config(project=None):
+    path = CONFIG
+    if project is not None:
+        from project import destination
+        path = destination(project)
+    c = read_json(path)
     for k in ('base_id', 'projects_table', 'updates_table'):
         if not isinstance(c.get(k), str) or not c[k].strip(): raise SyncError(f'Configuration needs {k}: {CONFIG}')
     return c
@@ -114,25 +118,37 @@ def repo_identity(path):
 
 def validate_payload(p):
     if not isinstance(p, dict): raise SyncError('Input must be a JSON object.')
-    allowed = {'project_name', 'title', 'completed', 'in_progress', 'blockers', 'next_steps', 'verification', 'evidence', 'source', 'current_stage', 'latest_progress'}
+    allowed = {'project_name', 'title', 'completed', 'in_progress', 'blockers', 'next_steps', 'verification', 'evidence', 'source', 'current_stage', 'latest_progress', 'record_type', 'content', 'record_status'}
     if set(p) - allowed: raise SyncError('Unknown input fields: ' + ', '.join(sorted(set(p)-allowed)))
     for k, v in p.items():
         if not isinstance(v, str): raise SyncError(f'{k} must be a string.')
         if len(v) > 50000: raise SyncError(f'{k} is too long.')
-    for k in ('project_name', 'title', 'completed'):
+    kind = p.get('record_type', 'progress')
+    if kind not in ('idea', 'requirement', 'decision', 'progress', 'blocker'): raise SyncError('Invalid record_type.')
+    body = 'completed' if kind == 'progress' else 'content'
+    if kind != 'progress' and not p.get('record_status', '').strip(): raise SyncError('Non-progress records require an explicit record_status.')
+    if kind != 'progress' and any(k in p for k in ('completed','latest_progress','current_stage','in_progress')): raise SyncError('Non-progress notes must not claim completed engineering work.')
+    for k in ('project_name', 'title', body):
         if not p.get(k, '').strip(): raise SyncError(f'{k} is required; no empty progress records.')
     return p
 
 def project_fields(payload, project_id, timestamp):
     f = FIELDS_PROJECT
-    out = {f['name']: payload['project_name'], f['project_id']: project_id, f['latest']: payload.get('latest_progress') or payload['completed'], f['synced']: timestamp}
+    out = {f['name']: payload['project_name'], f['project_id']: project_id, f['synced']: timestamp}
+    if payload.get('record_type','progress') == 'progress':
+        out[f['latest']] = payload.get('latest_progress') or payload['completed']
     for source, key in [('current_stage','stage'), ('blockers','blockers'), ('next_steps','next')]:
         if source in payload: out[f[key]] = payload[source]
     return out
 
 def update_fields(payload, update_id, project_record_id, timestamp):
     f = FIELDS_UPDATE
-    out = {f['name']: payload['title'], f['update_id']: update_id, f['project']: [project_record_id], f['completed']: payload['completed'], f['time']: timestamp}
+    out = {f['name']: payload['title'], f['update_id']: update_id, f['project']: [project_record_id], f['time']: timestamp}
+    kind = payload.get('record_type', 'progress')
+    if kind == 'progress': out[f['completed']] = payload['completed']
+    else:
+        out[f['name']] = '[' + kind + ' / ' + payload['record_status'] + '] ' + payload['title']
+        out[f['in_progress']] = payload['content']
     for source, key in [('in_progress','in_progress'), ('blockers','blockers'), ('next_steps','next'), ('verification','verification'), ('evidence','evidence'), ('source','source')]:
         if source in payload: out[f[key]] = payload[source]
     return out
@@ -157,7 +173,7 @@ def preview(args, c, state, api):
     # Only guard fields the plan intends to modify, not unrelated human-owned fields.
     before = {k: existing.get('fields', {}).get(k) for k in pf if k != FIELDS_PROJECT['synced']} if existing else None
     plan_id = 'upd_' + uuid.uuid4().hex
-    plan = {'id': plan_id, 'fingerprint': fp, 'destination': [c['base_id'], c['projects_table'], c['updates_table']], 'project_id': pid, 'project_root': root, 'project_remote': remote, 'payload': payload, 'timestamp': timestamp, 'project_record_id': existing['id'] if existing else None, 'before': before, 'project_fields': pf, 'project_done': False, 'update_done': False}
+    plan = {'id': plan_id, 'fingerprint': fp, 'config_snapshot': c, 'destination': [c['base_id'], c['projects_table'], c['updates_table']], 'project_id': pid, 'project_root': root, 'project_remote': remote, 'payload': payload, 'timestamp': timestamp, 'project_record_id': existing['id'] if existing else None, 'before': before, 'project_fields': pf, 'project_done': False, 'update_done': False}
     state['plans'][plan_id] = plan; write_json(STATE, state)
     print(json.dumps({'message': 'Preview only; no Airtable writes', 'plan': plan}, ensure_ascii=False, indent=2))
 
@@ -206,11 +222,15 @@ def main():
     sub = parser.add_subparsers(dest='cmd', required=True)
     pre = sub.add_parser('preview'); pre.add_argument('--input', required=True); pre.add_argument('--project', default='.'); pre.add_argument('--refresh', action='store_true', help='refresh a preview after a conflict before project write')
     ap = sub.add_parser('apply'); ap.add_argument('plan_id')
-    sub.add_parser('status')
+    status_parser = sub.add_parser('status'); status_parser.add_argument('--project')
     args = parser.parse_args()
     try:
         with locked():
-            c = load_config(); state = read_json(STATE, {'projects': {}, 'plans': {}})
+            state = read_json(STATE, {'projects': {}, 'plans': {}})
+            if args.cmd == 'apply':
+                c = state.get('plans', {}).get(args.plan_id, {}).get('config_snapshot') or load_config()
+            else:
+                c = load_config(getattr(args, 'project', None))
             if args.cmd == 'status':
                 api = Airtable(c); api.request(c['projects_table'], params={'maxRecords': 1}); api.request(c['updates_table'], params={'maxRecords': 1})
                 print(json.dumps({'status': 'connected', 'projects': len(state.get('projects', {})), 'pending_plans': [p['id'] for p in state.get('plans', {}).values() if not p['update_done']]}, ensure_ascii=False, indent=2))

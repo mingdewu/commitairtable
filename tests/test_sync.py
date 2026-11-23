@@ -113,6 +113,24 @@ class TestSync(unittest.TestCase):
         self.assertEqual(len(self.api.tables['projects']),1)
         self.assertEqual(len(self.api.tables['updates']),1)
         self.assertEqual(self.api.writes,['projects','updates'])
+    def test_idea_does_not_claim_completed_progress(self):
+        self.payload={'project_name':'Generic Project','title':'Initial thought','record_type':'idea','record_status':'Needs clarification','content':'User supplied thought; audience unknown'}
+        self.infile.write_text(json.dumps(self.payload))
+        pid=self.preview(); self.apply(pid)
+        project=next(iter(self.api.tables['projects'].values()))['fields']
+        update=next(iter(self.api.tables['updates'].values()))['fields']
+        self.assertNotIn('Latest Progress',project)
+        self.assertNotIn('Completed',update)
+        self.assertEqual(update['In Progress'],self.payload['content'])
+        self.assertIn('idea / Needs clarification',update['Name'])
+    def test_non_progress_requires_status_and_rejects_completion_claims(self):
+        p={'project_name':'Generic','title':'Thought','record_type':'idea','content':'Thought'}
+        with self.assertRaises(sync.SyncError):sync.validate_payload(p)
+        with self.assertRaises(sync.SyncError):sync.validate_payload({**p,'record_status':'Tentative','completed':'Done'})
+    def test_preview_keeps_destination_snapshot(self):
+        pid=self.preview()
+        saved=sync.read_json(sync.STATE)['plans'][pid]
+        self.assertEqual(saved['config_snapshot'],self.config)
     def test_empty_or_unknown_input_rejected(self):
         with self.assertRaises(sync.SyncError): sync.validate_payload({'project_name':'x','title':'t','completed':''})
         with self.assertRaises(sync.SyncError): sync.validate_payload({**self.payload,'token':'secret'})

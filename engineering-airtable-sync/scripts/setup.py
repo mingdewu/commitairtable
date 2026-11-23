@@ -172,7 +172,13 @@ def make_handler(secret):
     return Handler
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__); p.add_argument('--no-open', action='store_true'); args = p.parse_args()
+    global CONFIG, CHECKPOINT
+    p = argparse.ArgumentParser(description=__doc__); p.add_argument('--no-open', action='store_true'); p.add_argument('--project'); args = p.parse_args()
+    if args.project:
+        from project import config_path, register
+        CONFIG = config_path(args.project)
+        CHECKPOINT = CONFIG.with_suffix('.setup.json')
+        with locked(): register(args.project, CONFIG)
     if CONFIG.exists():
         print('本机已有配置，请先运行 sync.py status 检查连接；如需切换，先备份配置。'); return
     secret = secrets.token_urlsafe(32)
