@@ -62,7 +62,12 @@ def token(c):
         p = subprocess.run(['security', 'find-generic-password', '-s', c.get('keychain_service', 'engineering-airtable-sync'), '-w'], capture_output=True, text=True, check=True)
         if p.stdout.strip(): return p.stdout.strip()
     except (OSError, subprocess.CalledProcessError): pass
-    raise SyncError('Airtable token unavailable. Configure macOS Keychain or AIRTABLE_TOKEN; see README.')
+    secret_path = HOME / 'token'
+    if secret_path.exists():
+        if secret_path.stat().st_mode & 0o077: raise SyncError('Token file permissions must be 600.')
+        value = secret_path.read_text().strip()
+        if value: return value
+    raise SyncError('Airtable token unavailable. Run the browser setup wizard: python3 <skill-dir>/scripts/setup.py.')
 
 class Airtable:
     def __init__(self, config): self.c, self.token = config, token(config)

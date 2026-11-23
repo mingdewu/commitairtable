@@ -30,36 +30,42 @@ python3 scripts/install.py --agent antigravity
 
 两者都安装，使用 `python3 scripts/install.py --agent both`。
 
-安装脚本复制 Skill 到用户目录，不依赖本仓库的绝对路径。Codex 目标为 `~/.codex/skills/engineering-airtable-sync`；Antigravity 目标为 `~/.gemini/config/skills/engineering-airtable-sync`。已有同名安装时会停止，请先备份并移走旧安装，再安装新版本。安装后开启新会话，确认 Skill 已被发现。不同工具版本的发现目录可能有差异，请以实际产品为准。
+安装脚本复制 Skill 到用户目录，不依赖本仓库的绝对路径。Codex 目标为 `~/.codex/skills/engineering-airtable-sync`；Antigravity 目标为 `~/.gemini/config/skills/engineering-airtable-sync`。已有同名安装时默认停止。更新时运行 `python3 scripts/install.py --agent codex --update`（Antigravity 替换 agent 名；也支持 both），会自动备份旧 Skill 后更新，保留 Airtable 配置和工作记录。安装后开启新会话，确认 Skill 已被发现。不同工具版本的发现目录可能有差异，请以实际产品为准。
 
 ### 方式三：不用 Git
 
 在 GitHub 仓库页面选择 **Code → Download ZIP**，解压后进入 `commitairtable-main` 文件夹，在终端执行上面的安装命令。
 
-## 配置 Airtable
+## 首次连接：由 AI 启动浏览器向导
 
-每位使用者需要配置自己的 Airtable 访问权限；下载 Skill 不会获得作者的账户或令牌。
+安装后对 AI 说：
 
-1. 在 Airtable 创建一个 Base，以及 `Projects` 和 `Updates` 两张普通表。完整字段名称和类型见 [Airtable 配置说明](engineering-airtable-sync/references/setup.md)。
-2. 创建 PAT，为目标 Base 授予 `data.records:read`、`data.records:write`。在 macOS 使用钥匙串保存，或通过环境变量 `AIRTABLE_TOKEN` 提供。不要将令牌发给 AI 或提交到 GitHub。
-3. 创建 `~/.config/engineering-airtable-sync/config.json`，填写真实的 Base 和表 ID：
+> 帮我连接 Airtable，启动这个 Skill 的浏览器配置向导。
 
-```json
-{
-  "base_id": "app你的BaseID",
-  "projects_table": "tbl项目表ID",
-  "updates_table": "tbl工作记录表ID",
-  "keychain_service": "engineering-airtable-sync"
-}
-```
+AI 会运行 `engineering-airtable-sync/scripts/setup.py`，打开只在本机监听的配置页面。你只需要：
 
-在下载的仓库目录中检查连接：
+1. 在 Airtable 登录并创建 PAT，授权所选目标。将令牌输入本机页面的密码框，不发到 AI 对话。
+2. 选择创建新 Base 或连接已有 Base，粘贴目标工作区或 Base 的链接。AI 可以协助查找目标链接。
+3. 点击“创建 / 连接并保存配置”。
+
+向导自动创建 Base（新建模式）、Projects 和 Updates 表、字段及关联，自动取得 ID，保存令牌并生成本地配置。已有同名表会检查兼容性，补齐缺失字段；不兼容时停止，不删除现有数据。无需手工建表、输入终端命令或编辑 JSON。
+
+首次自动建表需要 `data.records:read`、`data.records:write`、`schema.bases:read`、`schema.bases:write`。创建 Base 还需要目标工作区的 Creator 权限，PAT 需覆盖该工作区的当前及未来 Base。仅连接已有 Base 时，可将 PAT 资源限制为该 Base。初始化后可撤掉 `schema.bases:write`，日常同步只使用记录读写。
+
+macOS 令牌保存在钥匙串；Linux / WSL 保存在本机权限 600 的令牌文件（未加密）。配置文件由向导自动生成，内容仅含非秘密 ID。每位使用者都需要自己的授权；当前采用 PAT，尚未实现 OAuth 一键授权。向导验证表结构和记录读取，实际记录写入由首次真实同步验证。
+
+如果已有配置，AI 应先检查连接，不覆盖现有目标。遇到创建请求中断，先检查 Airtable 是否已创建 Base，再通过已有 Base 链接恢复，避免重复创建。详细权限和手工排查见 [首次配置说明](engineering-airtable-sync/references/setup.md)。
+
+## 已安装旧版？
+
+在原下载目录中，让 AI 执行：
 
 ```bash
-python3 engineering-airtable-sync/scripts/sync.py status
+git pull --ff-only
+python3 scripts/install.py --agent codex --update
 ```
 
-`connected` 表示可以读取两张表；实际字段格式和写入权限须通过首次同步验证。
+使用 Antigravity 时将 `codex` 替换为 `antigravity`。然后开启新会话，要求启动浏览器向导；仅更新仓库不会自动更新已复制安装的 Skill。
 
 ## 在项目中使用
 
